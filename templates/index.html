@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tensorflow web deploy Demos</title>
+    <title>Tensorflow web deploy</title>
 
     <link href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css" rel="stylesheet">
-
-    <script type="text/javascript" src="//code.jquery.com/jquery-2.1.1.js"></script>
+	<link rel="icon" type="image/jpg" href="/templates/favicon.ico">
+    <script type="text/javascript" src="//code.jquery.com/jquery-2.1.1.js"></script> 
     <script src="//netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
 
     <!-- Script to instantly classify an image once it is uploaded. -->
@@ -47,7 +47,7 @@
     <div class="container">
       <div>
         <h2>Classification</h2>
-        <a href="/classify_url?imageurl=http://a0.att.hudong.com/55/58/19300001338703133421580854358.jpg">Click for a Quick Example</a>
+        <a href="/classify_url?imageurl=http://109.110.100.85/img_train/cropped_panda.jpg">Click for a Quick Example</a>
       </div>
 
       {% if has_result %}
@@ -66,9 +66,9 @@
                 <ul class="list-group">
                   {% for single_pred in result[1] %}
                   <li class="list-group-item">
-                  <span class="badge">{{ single_pred[1] }}</span>
+                  <span class="badge">{{ single_pred[1] }}</span>				 
                   <h4 class="list-group-item-heading">
-                    <a href="https://www.google.com/#q={{ single_pred[0] }}" target="_blank">{{ single_pred[0] }}</a>
+                    <a target="_blank">{{ single_pred[0] }}</a>
                   </h4>
                   </li>
                   {% endfor %}
@@ -79,7 +79,7 @@
 
         </div>
       </div>
-      <p> CNN took {{ result[2] }} seconds. </p>
+      <p> Tensorflow Softmax took {{ result[2] }} seconds. </p>
       {% endif %}
       <hr>
       {% endif %}
@@ -100,7 +100,7 @@
           <label for="imagefile">Or upload an image:</label>
           <input type="file" name="imagefile" id="imagefile">
         </div>
-        <!--<input type="submit" class="btn btn-primary" value="Classify File" id="classifyfile"></input>-->
+        <input type="submit" class="btn btn-primary" value="Classify File" id="classifyfile"></input>
       </form>
     </div>
 

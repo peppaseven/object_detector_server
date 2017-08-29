@@ -1,18 +1,26 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+import sys
+if sys.version_info.major == 2:
+    import cStringIO as StringIO
+    import urllib2
+else:
+    from io import StringIO
+    from io import BytesIO
+    from urllib import request
+    import base64
+
 import numpy as np
 import os
 import re
 import time
-import cPickle
 import datetime
 import logging
 import flask
 import werkzeug
 import optparse
-import cStringIO as StringIO
-import urllib2
+
 import math
 import exifutil
 import tensorflow as tf
@@ -21,13 +29,15 @@ from fileinput import filename
 
 REPO_DIRNAME = os.path.abspath(
     os.path.dirname(os.path.abspath(__file__)) + '/data')
-
+UPLOAD_FOLDER = os.path.abspath(
+    os.path.dirname(os.path.abspath(__file__)) + '/img_uploads')
 	
 NUM_CLASSES = 5
 NUM_TOP_CLASSES = 5
 # Obtain the flask app object
 app = flask.Flask(__name__)
-UPLOAD_FOLDER = '~/img_uploads'
+
+
 ALLOWED_IMAGE_EXTENSIONS = set(['png', 'jpg', 'jpe', 'jpeg'])
 
 FLAGS = tf.app.flags.FLAGS
@@ -42,7 +52,7 @@ def classify_index():
         url = flask.request.args.get('url')
         if url:
             logging.info('Image: %s', url)
-            string_buffer = urllib2.urlopen(url).read()
+            string_buffer = request.urlopen(url).read()
 
         file = flask.request.args.get('file')
         if file:
@@ -59,16 +69,26 @@ def classify_index():
         resp = flask.make_response()
         resp.status_code = 400
         return resp
-    names, probs, time_cost, accuracy = app.clf.classify_image(string_buffer)
+    names, time_cost, accuracy = app.clf.classify_image(file)
     return flask.make_response(u",".join(names), 200, {'ClassificationAccuracy': accuracy})
 
 
 @app.route('/classify_url', methods=['GET'])
 def classify_url():
     imageurl = flask.request.args.get('imageurl', '')
+    localfile = '/tmp/samplefile.png'
     try:
-        bytes = urllib2.urlopen(imageurl).read()
-        string_buffer = StringIO.StringIO(bytes)
+        bytes = request.urlopen(imageurl).read()
+        #save to tmp,just for temp use for my classify api.
+
+        tmpfile = open(localfile, 'wb')
+        tmpfile.write(bytes)
+        tmpfile.close();
+
+        if sys.version_info.major == 2:
+            string_buffer = StringIO.StringIO(bytes)
+        else:
+            string_buffer = BytesIO(bytes)
         image = exifutil.open_oriented_im(string_buffer)
 
     except Exception as err:
@@ -81,7 +101,9 @@ def classify_url():
         )
 
     app.logger.info('Image: %s', imageurl)
-    names, probs, time_cost, accuracy = app.clf.classify_image(bytes)
+
+    names, time_cost, probs = app.clf.classify_image(localfile)
+    os.remove(localfile)
     return flask.render_template(
         'index.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
         imagesrc=embed_image_html(image)
@@ -113,8 +135,7 @@ def classify_upload():
             result=(False, 'Cannot open uploaded image.')
         )
 
-    names, probs, time_cost, accuracy = app.clf.classify_image(
-        open(os.path.join(filename), "rb").read())
+    names,time_cost, probs = app.clf.classify_image(filename)
 
     return flask.render_template(
         'index.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
@@ -126,9 +147,18 @@ def embed_image_html(image):
     """Creates an image embedded in HTML base64 format."""
     image_pil = Image.fromarray((255 * image).astype('uint8'))
     image_pil = image_pil.resize((256, 256))
-    string_buf = StringIO.StringIO()
-    image_pil.save(string_buf, format='png')
-    data = string_buf.getvalue().encode('base64').replace('\n', '')
+    if sys.version_info.major == 2:
+        string_buf=StringIO.StringIO()
+        image_pil.save(string_buf, format='png')
+        data = string_buf.getvalue().encode('base64').replace('\n', '')
+    else:
+        _buf = BytesIO()
+        image_pil.save(_buf, format='png')
+        _buf.seek(0)
+        b64_buf = base64.b64encode(_buf.getvalue())
+        string_buf = StringIO(b64_buf.decode('utf-8', errors='replace'))
+        data =string_buf.getvalue().replace('\n', '')
+
     return 'data:image/png;base64,' + data
 
 
@@ -215,14 +245,12 @@ class ImagenetClassifier(object):
 
     def __init__(self, model_graph_file, label_map_file,human_label_map):
         logging.info('Loading net and associated files...')
-
         with tf.gfile.FastGFile(model_graph_file,'rb') as f:
             graph_def = tf.GraphDef()
             graph_def.ParseFromString(f.read())
             _ = tf.import_graph_def(graph_def, name='')
             self.sess = tf.Session()
             self.node_lookup = NodeLookup(label_map_file,human_label_map)
-            self.label_names = ['none']
 
     def eval_image(self, image, height, width, scope=None):
         """Prepare one image for evaluation.
@@ -262,24 +290,28 @@ class ImagenetClassifier(object):
             # Runs the softmax tensor by feeding the image_data as input to the graph.
             if not tf.gfile.Exists(image):
                 tf.logging.fatal('File does not exist %s', image)
+            print('Path is %s' %(image))
             image_data = tf.gfile.FastGFile(image, 'rb').read()
             softmax_tensor = self.sess.graph.get_tensor_by_name('softmax:0')
             predictions = self.sess.run(softmax_tensor,
                                    {'DecodeJpeg/contents:0': image_data})
+
             predictions = np.squeeze(predictions)
             # Creates node ID --> English string lookup.
             top_k = predictions.argsort()[-FLAGS.num_top_predictions:][::-1]
+            label_names = []
+            probs = []
             for node_id in top_k:
                 human_string = self.node_lookup.id_to_string(node_id)
                 score = predictions[node_id]
+                label_names.append(human_string.split(',')[0])
+                probs.append(score)
                 app.logger.info('%s (score = %.5f)' % (human_string, score))
 
-            labels = self.node_lookup.id_to_string(0)
-            probs = predictions[0]
+
             end_time = time.time()
-            app.logger.info(
-                "classify_image cost %.2f secs", end_time - start_time)
-            return [self.label_names[labels[0]], self.label_names[labels[1]], self.label_names[labels[2]]], probs[:3], end_time - start_time, sum(probs)
+            app.logger.info("classify_image cost %.2f secs", end_time - start_time)
+            return label_names[:3], end_time - start_time,probs[:3]
         except Exception as err:
             logging.info('Classification error: %s', err)
             return None
@@ -288,8 +320,8 @@ class ImagenetClassifier(object):
 def setup_app(app):
     app.clf = ImagenetClassifier(**ImagenetClassifier.default_args)
     app.logger.info('this is for warmup...')
-    bytes = open(os.path.join(REPO_DIRNAME, "sample.jpg"), "rb").read()
-    ret, _, _, _ = app.clf.classify_image(bytes)
+    sample = os.path.join(REPO_DIRNAME, "sample.jpg")
+    ret,_,_ = app.clf.classify_image(sample)
     app.logger.info("sample testing complete %s %s %s", ret[0], ret[1], ret[2])
 
 def start_from_terminal(app):
@@ -307,6 +339,7 @@ def start_from_terminal(app):
     app.run(debug=True, processes=1, host='0.0.0.0', port=opts.port)
 
 logging.getLogger().setLevel(logging.INFO)
+
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
