@@ -6,7 +6,6 @@
     <title>Tensorflow web deploy</title>
 
     <link href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css" rel="stylesheet">
-	<link rel="icon" type="image/jpg" href="/templates/favicon.ico">
     <script type="text/javascript" src="//code.jquery.com/jquery-2.1.1.js"></script> 
     <script src="//netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
 
@@ -59,16 +58,16 @@
         <a class="pull-left" href="#"><img class="media-object" width="192" height="192" src={{ imagesrc }}></a>
         <div class="media-body">
           <div class="bs-example bs-example-tabs">
-            <ul id="myTab" class="nav nav-tabs">
+            <!--<ul id="myTab" class="nav nav-tabs">
               <li class="active"><a href="#flatpred" data-toggle="tab">result</a></li>
-            </ul>
+            </ul>-->
               <div class="tab-pane fade in active" id="flatpred">
                 <ul class="list-group">
                   {% for single_pred in result[1] %}
                   <li class="list-group-item">
                   <span class="badge">{{ single_pred[1] }}</span>				 
                   <h4 class="list-group-item-heading">
-                    <a target="_blank">{{ single_pred[0] }}</a>
+                    <a  href="http://www.iciba.com/{{ single_pred[0] }}" target="_blank">{{ single_pred[0] }}</a>
                   </h4>
                   </li>
                   {% endfor %}
