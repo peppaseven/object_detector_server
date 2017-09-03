@@ -22,58 +22,34 @@ import werkzeug
 import optparse
 
 import math
-import exifutil
+from utils import exifutil
 import tensorflow as tf
 from PIL import Image
 from fileinput import filename
 
+from utils import label_map_util
+from utils import visualization_utils as vis_util
+
 REPO_DIRNAME = os.path.abspath(
     os.path.dirname(os.path.abspath(__file__)) + '/data')
+MODEL_DIRNAME =  os.path.abspath(
+    os.path.dirname(os.path.abspath(__file__)) + '/models')
 UPLOAD_FOLDER = os.path.abspath(
     os.path.dirname(os.path.abspath(__file__)) + '/img_uploads')
-	
-NUM_CLASSES = 5
-NUM_TOP_CLASSES = 5
+DETECTED_FOLDER = os.path.abspath(
+    os.path.dirname(os.path.abspath(__file__)) + '/img_detected')
+
+MODEL_NAME = 'ssd_mobilenet_v1_coco_11_06_2017'
+
 # Obtain the flask app object
 app = flask.Flask(__name__)
 
-
+NUM_CLASSES = 90
 ALLOWED_IMAGE_EXTENSIONS = set(['png', 'jpg', 'jpe', 'jpeg'])
 
 FLAGS = tf.app.flags.FLAGS
-tf.app.flags.DEFINE_integer('num_top_predictions', 5,
-                            """Display this many predictions.""")
 
-@app.route('/', methods=['GET', 'POST'])
-def classify_index():
-    string_buffer = None
-
-    if flask.request.method == 'GET':
-        url = flask.request.args.get('url')
-        if url:
-            logging.info('Image: %s', url)
-            string_buffer = request.urlopen(url).read()
-
-        file = flask.request.args.get('file')
-        if file:
-            logging.info('Image: %s', file)
-            string_buffer = open(file, 'rb').read()
-
-        if not string_buffer:
-            return flask.render_template('index.html', has_result=False)
-
-    elif flask.request.method == 'POST':
-        string_buffer = flask.request.stream.read()
-
-    if not string_buffer:
-        resp = flask.make_response()
-        resp.status_code = 400
-        return resp
-    names, time_cost, accuracy = app.clf.classify_image(file)
-    return flask.make_response(u",".join(names), 200, {'ClassificationAccuracy': accuracy})
-
-
-@app.route('/classify_url', methods=['GET'])
+@app.route('/detect_url', methods=['GET'])
 def classify_url():
     imageurl = flask.request.args.get('imageurl', '')
     localfile = '/tmp/samplefile.png'
@@ -96,21 +72,20 @@ def classify_url():
         # not continue.
         logging.info('URL Image open error: %s', err)
         return flask.render_template(
-            'index.html', has_result=True,
+            'detection.html', has_result=True,
             result=(False, 'Cannot open image from URL.')
         )
 
     app.logger.info('Image: %s', imageurl)
 
-    names, time_cost, probs = app.clf.classify_image(localfile)
+    image_np, time_cost = app.clf.detect_image(localfile)
     os.remove(localfile)
     return flask.render_template(
-        'index.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
+        'detection.html', has_result=True, result=[True, '%.3f' % time_cost],
         imagesrc=embed_image_html(image)
     )
 
-
-@app.route('/classify_upload', methods=['POST'])
+@app.route('/detect_upload', methods=['POST'])
 def classify_upload():
     try:
         # We will save the file to disk for possible data collection.
@@ -126,7 +101,8 @@ def classify_upload():
             im.save(filename)
 
         logging.info('Saving to %s.', filename)
-        image = exifutil.open_oriented_im(filename)
+
+
 
     except Exception as err:
         logging.info('Uploaded image open error: %s', err)
@@ -135,10 +111,13 @@ def classify_upload():
             result=(False, 'Cannot open uploaded image.')
         )
 
-    names,time_cost, probs = app.clf.classify_image(filename)
+    image_np,time_cost = app.clf.detect_image(filename)
+    outfile = os.path.join(DETECTED_FOLDER,filename_)
+    app.clf.save_png_image(image_np,outfile)
+    image = exifutil.open_oriented_im(outfile)
 
     return flask.render_template(
-        'index.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
+        'detection.html', has_result=True, result=[True,'%.3f' % time_cost],
         imagesrc=embed_image_html(image)
     )
 
@@ -146,6 +125,7 @@ def classify_upload():
 def embed_image_html(image):
     """Creates an image embedded in HTML base64 format."""
     image_pil = Image.fromarray((255 * image).astype('uint8'))
+
     image_pil = image_pil.resize((256, 256))
     if sys.version_info.major == 2:
         string_buf=StringIO.StringIO()
@@ -167,75 +147,24 @@ def allowed_file(filename):
         '.' in filename and
         filename.rsplit('.', 1)[1] in ALLOWED_IMAGE_EXTENSIONS
     )
+# Path to frozen detection graph. This is the actual model that is used for the object detection.
+PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
+# List of the strings that is used to add correct label for each box.
+PATH_TO_LABELS =  'mscoco_label_map.pbtxt'
 
 
-class NodeLookup(object):
-  """Converts integer node ID's to human readable labels."""
+def load_image_into_numpy_array(image):
+    (im_width, im_height) = image.size
+    return np.array(image.getdata()).reshape(
+        (im_height, im_width, 3)).astype(np.uint8)
 
-  def __init__(self,
-               label_lookup_path,
-               uid_lookup_path):
 
-    self.node_lookup = self.load(label_lookup_path, uid_lookup_path)
-
-  def load(self, label_lookup_path, uid_lookup_path):
-    """Loads a human readable English name for each softmax node.
-
-    Args:
-      label_lookup_path: string UID to integer node ID.
-      uid_lookup_path: string UID to human-readable string.
-
-    Returns:
-      dict from integer node ID to human-readable string.
-    """
-    if not tf.gfile.Exists(uid_lookup_path):
-      tf.logging.fatal('File does not exist %s', uid_lookup_path)
-    if not tf.gfile.Exists(label_lookup_path):
-      tf.logging.fatal('File does not exist %s', label_lookup_path)
-
-    # Loads mapping from string UID to human-readable string
-    proto_as_ascii_lines = tf.gfile.GFile(uid_lookup_path).readlines()
-    uid_to_human = {}
-    p = re.compile(r'[n\d]*[ \S,]*')
-    for line in proto_as_ascii_lines:
-      parsed_items = p.findall(line)
-      uid = parsed_items[0]
-      human_string = parsed_items[2]
-      uid_to_human[uid] = human_string
-
-    # Loads mapping from string UID to integer node ID.
-    node_id_to_uid = {}
-    proto_as_ascii = tf.gfile.GFile(label_lookup_path).readlines()
-    for line in proto_as_ascii:
-      if line.startswith('  target_class:'):
-        target_class = int(line.split(': ')[1])
-      if line.startswith('  target_class_string:'):
-        target_class_string = line.split(': ')[1]
-        node_id_to_uid[target_class] = target_class_string[1:-2]
-
-    # Loads the final mapping of integer node ID to human-readable string
-    node_id_to_name = {}
-    for key, val in node_id_to_uid.items():
-      if val not in uid_to_human:
-        tf.logging.fatal('Failed to locate: %s', val)
-      name = uid_to_human[val]
-      node_id_to_name[key] = name
-
-    return node_id_to_name
-
-  def id_to_string(self, node_id):
-    if node_id not in self.node_lookup:
-      return ''
-    return self.node_lookup[node_id]
-
-class ImagenetClassifier(object):
+class ObjectDetection(object):
     default_args = {
         'model_graph_file': (
-            '{}/classify_image_graph_def.pb'.format(REPO_DIRNAME)),
+            '{}/{}'.format(MODEL_DIRNAME,PATH_TO_CKPT)),
         'label_map_file': (
-            '{}/imagenet_2012_challenge_label_map_proto.pbtxt'.format(REPO_DIRNAME)),
-        'human_label_map': (
-            '{}/imagenet_synset_to_human_label_map.txt'.format(REPO_DIRNAME)),
+            '{}/{}'.format(REPO_DIRNAME,PATH_TO_LABELS)),
     }
     for key, val in default_args.items():
 
@@ -243,41 +172,34 @@ class ImagenetClassifier(object):
             raise Exception(
                 "File for {} is missing. Should be at: {}".format(key, val))
 
-    def __init__(self, model_graph_file, label_map_file,human_label_map):
+    def __init__(self, model_graph_file, label_map_file):
         logging.info('Loading net and associated files...')
-        with tf.gfile.FastGFile(model_graph_file,'rb') as f:
-            graph_def = tf.GraphDef()
-            graph_def.ParseFromString(f.read())
-            _ = tf.import_graph_def(graph_def, name='')
-            self.sess = tf.Session()
-            self.node_lookup = NodeLookup(label_map_file,human_label_map)
+        self.detection_graph = tf.Graph()
+        with self.detection_graph.as_default():
+            od_graph_def = tf.GraphDef()
+            with tf.gfile.GFile(model_graph_file, 'rb') as fid:
+                serialized_graph = fid.read()
+                od_graph_def.ParseFromString(serialized_graph)
+                tf.import_graph_def(od_graph_def, name='')
+        self.sess = tf.Session(graph=self.detection_graph)
+        # ## Loading label map
+        # Label maps map indices to category names, so that when our convolution network predicts `5`, we know that this corresponds to `airplane`.  Here we use internal utility functions, but anything that returns a dictionary mapping integers to appropriate string labels would be fine
+        label_map = label_map_util.load_labelmap(label_map_file)
+        categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES,
+                                                                    use_display_name=True)
+        self.category_index = label_map_util.create_category_index(categories)
 
-    def eval_image(self, image, height, width, scope=None):
-        """Prepare one image for evaluation.
+        self.image_tensor = self.detection_graph.get_tensor_by_name('image_tensor:0')
+        # Each box represents a part of the image where a particular object was detected.
+        self.boxes = self.detection_graph.get_tensor_by_name('detection_boxes:0')
+        # Each score represent how level of confidence for each of the objects.
+        # Score is shown on the result image, together with the class label.
+        self.scores = self.detection_graph.get_tensor_by_name('detection_scores:0')
+        self.classes = self.detection_graph.get_tensor_by_name('detection_classes:0')
+        self.num_detections = self.detection_graph.get_tensor_by_name('num_detections:0')
 
-        Args:
-          image: 3-D float Tensor
-          height: integer
-          width: integer
-          scope: Optional scope for op_scope.
-        Returns:
-          3-D float Tensor of prepared image.
-        """
-        #image = tf.reshape(image, [height,width,3])
-        # return images
-        with tf.op_scope([image, height, width], scope, 'eval_image'):
-            # Crop the central region of the image with an area containing 87.5% of
-            # the original image.
-            image = tf.image.central_crop(image, central_fraction=0.875)
 
-            # Resize the image to the original height and width.
-            image = tf.expand_dims(image, 0)
-            image = tf.image.resize_bilinear(image, [height, width],
-                                             align_corners=False)
-            image = tf.squeeze(image, [0])
-            return image
-
-    def classify_image(self, image):
+    def detect_image(self, image):
         try:
             start_time = time.time()
             # Some useful tensors:
@@ -291,38 +213,43 @@ class ImagenetClassifier(object):
             if not tf.gfile.Exists(image):
                 tf.logging.fatal('File does not exist %s', image)
             print('Path is %s' %(image))
-            image_data = tf.gfile.FastGFile(image, 'rb').read()
-            softmax_tensor = self.sess.graph.get_tensor_by_name('softmax:0')
-            predictions = self.sess.run(softmax_tensor,
-                                   {'DecodeJpeg/contents:0': image_data})
+            image_data = Image.open(image)
+            # the array based representation of the image will be used later in order to prepare the
+            # result image with boxes and labels on it.
+            image_np = load_image_into_numpy_array(image_data)
+            # Expand dimensions since the model expects images to have shape: [1, None, None, 3]
+            image_np_expanded = np.expand_dims(image_np, axis=0)
 
-            predictions = np.squeeze(predictions)
-            # Creates node ID --> English string lookup.
-            top_k = predictions.argsort()[-FLAGS.num_top_predictions:][::-1]
-            label_names = []
-            probs = []
-            for node_id in top_k:
-                human_string = self.node_lookup.id_to_string(node_id)
-                score = predictions[node_id]
-                label_names.append(human_string.split(',')[0])
-                probs.append(score)
-                app.logger.info('%s (score = %.5f)' % (human_string, score))
-
-
+            # Actual detection.
+            (boxes, scores, classes, num_detections) = self.sess.run(
+                [self.boxes, self.scores, self.classes, self.num_detections],
+                feed_dict={self.image_tensor: image_np_expanded})
+            # Visualization of the results of a detection.
+            vis_util.visualize_boxes_and_labels_on_image_array(
+                image_np,
+                np.squeeze(boxes),
+                np.squeeze(classes).astype(np.int32),
+                np.squeeze(scores),
+                self.category_index,
+                use_normalized_coordinates=True,
+                line_thickness=8)
             end_time = time.time()
-            app.logger.info("classify_image cost %.2f secs", end_time - start_time)
-            return label_names[:3], end_time - start_time,probs[:3]
+            app.logger.info("detection cost %.2f secs", end_time - start_time)
+            return image_np, end_time - start_time
         except Exception as err:
-            logging.info('Classification error: %s', err)
+            logging.info('Object detection error: %s', err)
             return None
+
+    def save_png_image(self,image_np,output_path):
+         vis_util.save_image_array_as_png(image_np,output_path)
 
 
 def setup_app(app):
-    app.clf = ImagenetClassifier(**ImagenetClassifier.default_args)
+    app.clf = ObjectDetection(**ObjectDetection.default_args)
     app.logger.info('this is for warmup...')
     sample = os.path.join(REPO_DIRNAME, "sample.jpg")
-    ret,_,_ = app.clf.classify_image(sample)
-    app.logger.info("sample testing complete %s %s %s", ret[0], ret[1], ret[2])
+    ret,time_cost = app.clf.detect_image(sample)
+    app.logger.info("sample testing complete %.3f",time_cost)
 
 def start_from_terminal(app):
     """
@@ -332,7 +259,7 @@ def start_from_terminal(app):
     parser.add_option(
         '-p', '--port',
         help="which port to serve content on",
-        type='int', default=5005)
+        type='int', default=31000)
     opts, args = parser.parse_args()
     # Initialize classifier + warm start by forward for allocation
     setup_app(app)
