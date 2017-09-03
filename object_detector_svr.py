@@ -269,6 +269,8 @@ logging.getLogger().setLevel(logging.INFO)
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(DETECTED_FOLDER):
+    os.makedirs(DETECTED_FOLDER)
 
 if __name__ == '__main__':
     start_from_terminal(app)
