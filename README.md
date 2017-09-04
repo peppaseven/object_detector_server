@@ -12,7 +12,7 @@ Except for google tensorflow models,some codes from https://github.com/hetaoaoao
 
 # how to make this work
 Assume that you have installed tensorflow, flask, gunicorn. There may be other python module dependencies, pip install them.
-1. run classify.sh(detector.sh is expertise demod,you's better read my codes,you can undertand it w/ very similar steps as classify)
+1. run classify.sh(detector.sh has very similar steps as classify)
 2. Open your browser, navigate to "http://localhost:30000", the page should be simple enough to understand.
 3. Use as webservice. Modify the interface for your need.   
   > curl --request POST --data-binary "@sample.jpg" http://localhost:30000
