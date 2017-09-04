@@ -46,7 +46,7 @@
     <div class="container">
       <div>
         <h2>Classification</h2>
-        <a href="/classify_url?imageurl=http://192.168.50.68/img_train/cropped_panda.jpg">Click for a Quick Example</a>
+        <a href="/classify_url?imageurl=http://pic.meituba.com/uploads/allimg/2016/11/18/201_142.jpg">Click for a Quick Example</a>
       </div>
 
       {% if has_result %}
@@ -58,9 +58,9 @@
         <a class="pull-left" href="#"><img class="media-object" width="192" height="192" src={{ imagesrc }}></a>
         <div class="media-body">
           <div class="bs-example bs-example-tabs">
-            <ul id="myTab" class="nav nav-pills">
+            <!--<ul id="myTab" class="nav nav-pills">
               <li class="active"><a href="#flatpred" data-toggle="tab">result</a></li>
-            </ul>
+            </ul>-->
               <div class="tab-pane fade in active" id="flatpred">
                 <ul class="list-group">
                   {% for single_pred in result[1] %}

@@ -60,7 +60,7 @@ def classify_index():
             string_buffer = open(file, 'rb').read()
 
         if not string_buffer:
-            return flask.render_template('index.html', has_result=False)
+            return flask.render_template('classify.html', has_result=False)
 
     elif flask.request.method == 'POST':
         string_buffer = flask.request.stream.read()
@@ -131,14 +131,14 @@ def classify_upload():
     except Exception as err:
         logging.info('Uploaded image open error: %s', err)
         return flask.render_template(
-            'index.html', has_result=True,
+            'classify.html', has_result=True,
             result=(False, 'Cannot open uploaded image.')
         )
 
     names,time_cost, probs = app.clf.classify_image(filename)
 
     return flask.render_template(
-        'index.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
+        'classify.html', has_result=True, result=[True, zip(names, probs), '%.3f' % time_cost],
         imagesrc=embed_image_html(image)
     )
 
