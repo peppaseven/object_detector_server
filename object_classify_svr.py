@@ -20,13 +20,13 @@ import logging
 import flask
 import werkzeug
 import optparse
-
+import json
 import math
 from utils import exifutil
 import tensorflow as tf
 from PIL import Image
 from fileinput import filename
-
+from utils.tempimage import TempImage
 REPO_DIRNAME = os.path.abspath(
     os.path.dirname(os.path.abspath(__file__)) + '/data')
 UPLOAD_FOLDER = os.path.abspath(
@@ -142,6 +142,23 @@ def classify_upload():
         imagesrc=embed_image_html(image)
     )
 
+@app.route('/classify_image', methods=['POST'])
+def classify_image():
+    t = TempImage()
+    try:
+        # We will save the file to disk for possible data collection.
+        imagefile = flask.request.files['imagefile']
+        # write the image to temporary file
+
+        imagefile.save(t.path)
+
+    except Exception as err:
+        logging.info('Uploaded image open error: %s', err)
+        return json.dumps({'has_result':False})
+
+    names,time_cost, probs = app.clf.classify_image(t.path)
+    t.cleanup()
+    return json.dumps({'has_result':True,'name':names[0]})
 
 def embed_image_html(image):
     """Creates an image embedded in HTML base64 format."""
